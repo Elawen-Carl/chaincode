@@ -1,17 +1,32 @@
 {
-    "name": "waste-management-contract",
+    "name": "waste-management-chaincode",
     "version": "1.0.0",
-    "description": "垃圾分类管理系统的智能合约",
+    "description": "垃圾分类管理系统智能合约",
     "main": "index.js",
-    "scripts": {
-        "start": "fabric-chaincode-node start"
-    },
     "engines": {
         "node": ">=12",
-        "npm": ">=6.14.0"
+        "npm": ">=6"
     },
+    "scripts": {
+        "start": "node index.js",
+        "test": "jest"
+    },
+    "keywords": [
+        "fabric",
+        "chaincode",
+        "waste",
+        "management"
+    ],
+    "author": "Hyperledger",
+    "license": "Apache-2.0",
     "dependencies": {
         "fabric-contract-api": "^2.4.1",
         "fabric-shim": "^2.4.1"
+    },
+    "devDependencies": {
+        "jest": "^27.0.6",
+        "chai": "^4.3.4",
+        "sinon": "^11.1.1",
+        "winston": "^3.3.3"
     }
 } 

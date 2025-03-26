@@ -124,50 +124,35 @@ class WasteManagementContract extends Contract {
     // 按类型查询垃圾统计
     async queryWasteByType(ctx, wasteType) {
         console.info('============= 按类型查询垃圾统计 ===========');
-
-        const queryString = {
-            selector: {
-                docType: 'wasteDisposal',
-                wasteType: wasteType
-            }
-        };
-
-        return await this.queryWithQueryString(ctx, JSON.stringify(queryString));
+        return await this.queryWithStateRange(ctx, 'wasteDisposal', 'wasteType', wasteType);
     }
 
     // 按用户查询垃圾投放记录
     async queryWasteByUser(ctx, userId) {
         console.info('============= 按用户查询垃圾投放记录 ===========');
-
-        const queryString = {
-            selector: {
-                docType: 'wasteDisposal',
-                userId: userId
-            }
-        };
-
-        return await this.queryWithQueryString(ctx, JSON.stringify(queryString));
+        return await this.queryWithStateRange(ctx, 'wasteDisposal', 'userId', userId);
     }
 
-    // 通用查询方法
-    async queryWithQueryString(ctx, queryString) {
+    // 使用StateRange的通用查询方法
+    async queryWithStateRange(ctx, docType, fieldName, fieldValue) {
         console.info('============= 通用查询 ===========');
 
-        const iterator = await ctx.stub.getQueryResult(queryString);
+        const iterator = await ctx.stub.getStateByRange('', '');
         const results = [];
 
         while (true) {
             const res = await iterator.next();
             if (res.value && res.value.value.toString()) {
-                console.log(res.value.value.toString());
                 let record;
                 try {
                     record = JSON.parse(res.value.value.toString('utf8'));
+                    // 在内存中过滤符合条件的记录
+                    if (record.docType === docType && record[fieldName] === fieldValue) {
+                        results.push(record);
+                    }
                 } catch (err) {
                     console.log(err);
-                    record = res.value.value.toString('utf8');
                 }
-                results.push(record);
             }
 
             if (res.done) {
@@ -176,6 +161,103 @@ class WasteManagementContract extends Contract {
                 return JSON.stringify(results);
             }
         }
+    }
+
+    // 更新垃圾处理状态 (从投放到处理的状态变更)
+    async updateWasteStatus(ctx, disposalId, newStatus, operator, remarks) {
+        console.info('============= 更新垃圾处理状态 ===========');
+
+        const disposalBytes = await ctx.stub.getState(disposalId);
+        if (!disposalBytes || disposalBytes.length === 0) {
+            throw new Error(`垃圾记录 ${disposalId} 不存在`);
+        }
+
+        const disposal = JSON.parse(disposalBytes.toString());
+        const oldStatus = disposal.status;
+        disposal.status = newStatus;
+
+        // 记录状态变更历史
+        if (!disposal.statusHistory) {
+            disposal.statusHistory = [];
+        }
+
+        disposal.statusHistory.push({
+            from: oldStatus,
+            to: newStatus,
+            operator: operator,
+            timestamp: new Date().toISOString(),
+            remarks: remarks
+        });
+
+        await ctx.stub.putState(disposalId, Buffer.from(JSON.stringify(disposal)));
+        console.info(`垃圾记录 ${disposalId} 状态已从 ${oldStatus} 更新为 ${newStatus}`);
+
+        return JSON.stringify(disposal);
+    }
+
+    // 用户积分转移
+    async transferPoints(ctx, fromUserId, toUserId, points, remarks) {
+        console.info('============= 用户积分转移 ===========');
+
+        const pointsToTransfer = parseInt(points);
+        if (pointsToTransfer <= 0) {
+            throw new Error('转移积分必须大于0');
+        }
+
+        // 获取转出用户信息
+        const fromUserKey = 'user_' + fromUserId;
+        const fromUserBytes = await ctx.stub.getState(fromUserKey);
+        if (!fromUserBytes || fromUserBytes.length === 0) {
+            throw new Error(`用户 ${fromUserId} 不存在`);
+        }
+        const fromUser = JSON.parse(fromUserBytes.toString());
+
+        // 检查积分是否足够
+        if (parseFloat(fromUser.totalPoints) < pointsToTransfer) {
+            throw new Error(`积分不足，当前积分: ${fromUser.totalPoints}, 需要: ${pointsToTransfer}`);
+        }
+
+        // 获取转入用户信息
+        const toUserKey = 'user_' + toUserId;
+        let toUserBytes = await ctx.stub.getState(toUserKey);
+        let toUser;
+
+        if (!toUserBytes || toUserBytes.length === 0) {
+            // 如果用户不存在，创建新用户
+            toUser = {
+                docType: 'user',
+                userId: toUserId,
+                totalPoints: 0,
+                wasteRecords: []
+            };
+        } else {
+            toUser = JSON.parse(toUserBytes.toString());
+        }
+
+        // 执行积分转移
+        fromUser.totalPoints = (parseFloat(fromUser.totalPoints) - pointsToTransfer).toString();
+        toUser.totalPoints = (parseFloat(toUser.totalPoints) + pointsToTransfer).toString();
+
+        // 记录交易
+        const transactionId = ctx.stub.getTxID();
+        const transaction = {
+            docType: 'pointsTransaction',
+            transactionId: transactionId,
+            fromUserId: fromUserId,
+            toUserId: toUserId,
+            points: pointsToTransfer,
+            remarks: remarks,
+            timestamp: new Date().toISOString()
+        };
+
+        // 更新状态
+        await ctx.stub.putState(fromUserKey, Buffer.from(JSON.stringify(fromUser)));
+        await ctx.stub.putState(toUserKey, Buffer.from(JSON.stringify(toUser)));
+        await ctx.stub.putState('transaction_' + transactionId, Buffer.from(JSON.stringify(transaction)));
+
+        console.info(`用户 ${fromUserId} 转移了 ${pointsToTransfer} 积分给用户 ${toUserId}, 交易ID: ${transactionId}`);
+
+        return JSON.stringify(transaction);
     }
 }
 
